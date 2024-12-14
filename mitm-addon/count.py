@@ -7,7 +7,8 @@
 
 import logging
 import re
-
+from urllib.parse import urlparse
+from mitmproxy import ctx
 
 
 def parse_csp(csp_value: str):
@@ -46,7 +47,7 @@ def check_response_headers_csp(flow):
 
 
 
-def check_cookie_http_only(flow: http.HTTPFlow):
+def check_cookie_http_only(flow):
     # TODO read: https://docs.gitlab.com/ee/user/application_security/dast/browser/checks/352.1.html
     cookies_in_response = flow.response.cookies
 
@@ -104,10 +105,24 @@ def simple_header_set_check(flow):
         logging.warn("X-Content-Type-Options exists but not set to nosniff")
 
 def simple_config_file_exposure_check(flow):
-    #TODO: check .htaccess 
 
-    # TODO: check .env
-    pass
+
+    flow_referrrer = flow.request.headers.get('Referer')
+    # have to add one more r to compensate for this^
+
+    flow_domain = urlparse(flow_referrrer).netloc
+    logging.info(f"Will try htaccess on this domain: {flow_domain}")
+
+    # Check .htaccess 
+    htaccess_check_flow = flow.copy()
+    htaccess_check_flow.request.path = '/.htaccess'
+    ctx.master.commands.call('replay.client', [htaccess_check_flow])
+
+    # Check .env file
+    env_check_flow = flow.copy()
+    env_check_flow.request.path = '/.env'
+    ctx.master.commands.call('replay.client', [env_check_flow])
+
 
 
 def code_disclosure_check(flow):
@@ -137,7 +152,7 @@ def simple_header_info_leak_check(flow):
 
 
 
-def check_cors(flow, skan_mode):
+def check_cors(flow, flow_site_id, skan_mode):
 
     #TODO read header forbidden: https://developer.mozilla.org/en-US/docs/Glossary/Forbidden_header_name
 
@@ -166,7 +181,8 @@ def check_sensitive_in_get(flow):
     pass
 
 
-
+def slow_lorris_attack(floew):
+    pass
 
 
 class Counter:
@@ -182,7 +198,7 @@ class Counter:
     },
 
     'all' : {
-            'url_regex': '.*',
+            'url_regex': '.*',   
             'scan_mode': 'watch' # 'probe' | 'attack'
     }
 
@@ -206,6 +222,7 @@ class Counter:
     }
 
     running_attacks = {}
+    completed_attacks = {}
 
 
     # Active checks 
@@ -215,11 +232,39 @@ class Counter:
         logging.debug("Request header is %s" % flow.request.headers)
 
     def request(self, flow):
-       pass
+        logging.info(f"Flow req path: {flow.request.path}")
+        pass
 
         #logging.info("Flow headers %s" % flow.request.headers)
 
     def response(self, flow):
+
+        if flow.is_replay == 'request':
+            logging.info(f"Got a replay's response [{flow.response.status_code }] with {flow.request.method} host {flow.request.host} and path {flow.request.path}")
+            logging.info(flow.request.path)
+            logging.info(flow.response.status_code)
+
+            logging.info(flow.request.path == '/.htaccess' )
+            logging.info(flow.response.status_code < 400)
+            if flow.request.path == '/.htaccess' and flow.response.status_code < 400:
+                logging.warn(f"Got non error response for htcaccess with content {flow.response.content}")
+
+                response_test = flow.response.content.decode('utf-8')
+
+                htcaccess_file_keywords = ['AuthName', 'AuthType', 'AddHandler']
+                htcaccess_file_keywords_in_response_body = [k in response_test for k in htcaccess_file_keywords].count(True)
+
+                if htcaccess_file_keywords_in_response_body > 0:
+                    logging.warn(f"Found {htcaccess_file_keywords_in_response_body} keywords in htcaccess body")
+
+
+
+
+            if flow.request.path == '/.env' and flow.response.status_code < 400:
+                logging.warn(f"Got non error response for env file with content {flow.response.content}")
+
+            # Process the replay and return. To avoid infinite loop
+            return
 
         flow_referer = flow.request.headers.get('Referer')
 
@@ -249,6 +294,37 @@ class Counter:
         check_cookie_http_only(flow)
 
         check_cors(flow, flow_site_id, flow_attack_mode)
+
+        if flow_attack_mode == 'probe':
+            #TODO write probing test
+
+            if (
+                not self.completed_attacks.get(f"simple_config_exposure_{flow_site_id}") 
+                and flow.request.method == 'GET'
+
+            ):
+                simple_config_file_exposure_check(flow)
+                self.completed_attacks[f"simple_config_exposure_{flow_site_id}"] = True
+
+
+        if flow_attack_mode == 'attack':
+            #TODO wrtie attacking tests
+
+            # Resubmit form with http
+
+            # resubmit form with injection
+
+            
+            # Slow Lorris
+
+                
+            pass
+
+    # def done():
+    #     logging.info("Shutting down.. Will generate report")
+
+
+
 
 
 addons = [Counter()]
