@@ -10,36 +10,56 @@ from enum import Enum
 from typing import Literal
 import logging
 
-class CspDirective(enum.Enum):
-    CHILD_SRC = '1'
-    CONNECT_SRC = '2'
-    DEFAULT_SRC = '3'
-    FENCED_FRAME_SRC = '4'
-    FONT_SRC = '5'
-    FONT_SRC = '6'
-    IMG_SRC = '7'
-    MANIFEST_SRC = '8'
-    MEDIA_SRC = '9'
-    OBJECT_SRC = '10'
-    PREFETCH_SRC = '11'
-    SCRIPT_SRC = '12'
-    SCRIPT_SRC_ELEM = '13'
-    SCRIPT_SRC_ATTR = '14'
-    STYLE_SRC = '15'
-    STYLE_SRC_ELEM = '16'
-    STYLE_SRC_ATTR = '17'
-    WORKER_SRC = '18'
 
+skan_mode = 'watch' # 'probe' | 'attack'
+target_sites_substring = set()
+
+scan_results = {
+    'csp': [],
+    'xss': [],
+    
+
+    # Leaked information
+
+    'env_leak': [],
+    'htcaccess_leak': [],
+
+    # cors
+
+    'cors': []
+    # --
+}
 
 def parse_csp(csp_value: str):
+    if not csp_value:
+        return None
+        
     directives = csp_value.split(';')
     directives = [ d.strip() for d in directives]
     directives = [ d.split() for d in directives]
 
+    return {c[0]: c[1:] for c in directives}
 
 
 def check_response_headers_csp(flow):
-    logging.info("response header iss %s" % flow.response.headers)
+    # logging.info("response header iss %s" % flow.response.headers)
+
+    csp_header = flow.response.headers.get("content-security-policy")
+
+    # logging.info("response header iss %s" % csp_header)
+
+    csp_directives = parse_csp(csp_header)
+    logging.info("csp directives arre  %s" % csp_directives)
+    # logging.info("csp directives arre  %s" % )
+
+    # 1. Check for XSS
+
+    # 2. Check for IFrame
+
+    # x_frame_option_header = flow.response.headers["X-Frame-Options"]
+
+
+
 
 
 
