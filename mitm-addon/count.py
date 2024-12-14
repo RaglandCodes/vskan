@@ -5,39 +5,10 @@
 # mitmdump -s "C:\Users\ragla\Documents\coding_projects\vskan\mitm-addon\count.py"
 
 
-from mitmproxy import http
-from enum import Enum
-from typing import Literal
 import logging
+import re
 
 
-target_sites = [
-    # !! First matching rule will apply
-    {
-        'url_regex': '*',
-        'scan_mode': 'watch' # 'probe' | 'attack'
-    }
-]
-
-
-# Active checks 
-# https://docs.gitlab.com/ee/user/application_security/dast/browser/checks/#active-checks
-
-scan_results = {
-    'csp': [],
-    'xss': [],
-    
-
-    # Leaked information
-
-    'env_leak': [],
-    'htcaccess_leak': [],
-
-    # cors
-
-    'cors': []
-    # --
-}
 
 def parse_csp(csp_value: str):
     if not csp_value:
@@ -65,8 +36,11 @@ def check_response_headers_csp(flow):
 
     # 2. Check for IFrame
 
+
+
     # x_frame_option_header = flow.response.headers["X-Frame-Options"]
 
+    #3. Check for Clickjacking https://developer.mozilla.org/en-US/docs/Web/Security/Practical_implementation_guides/Clickjacking
 
 
 
@@ -114,7 +88,7 @@ def check_cookie_http_only(flow: http.HTTPFlow):
                 else:
                     #TODO check if is a session
                     logging.warn("%s is not set HttpOnly.." % x)
-                
+
 
 def simple_header_set_check(flow):
 
@@ -128,6 +102,21 @@ def simple_header_set_check(flow):
         # TODO: read https://en.wikipedia.org/wiki/Content_sniffing
         # TODO: read about mime types: https://developer.mozilla.org/en-US/docs/Web/HTTP/MIME_types#structure_of_a_mime_type
         logging.warn("X-Content-Type-Options exists but not set to nosniff")
+
+def simple_config_file_exposure_check(flow):
+    #TODO: check .htaccess 
+
+    # TODO: check .env
+    pass
+
+
+def code_disclosure_check(flow):
+    # WEB_INF
+    # TODO: ZAP code: https://github.com/zaproxy/zap-extensions/blob/main/addOns/ascanrules/src/main/java/org/zaproxy/zap/extension/ascanrules/SourceCodeDisclosureWebInfScanRule.java
+
+    # Swagger
+
+    pass
 
 
 
@@ -185,6 +174,43 @@ class Counter:
         pass
 
 
+    target_sites = {
+    # !! First matching rule will apply
+    'owasp_juice' : {
+            'url_regex': 'https?://juice-shop-p0va.onrender.com*',
+            'scan_mode': 'probe' # 'probe' | 'attack'
+    },
+
+    'all' : {
+            'url_regex': '.*',
+            'scan_mode': 'watch' # 'probe' | 'attack'
+    }
+
+
+    }
+
+    scan_results = {
+        'csp': [],
+        'xss': [],
+        
+
+        # Leaked information
+
+        'env_leak': [],
+        'htcaccess_leak': [],
+
+        # cors
+
+        'cors': []
+        # --
+    }
+
+    running_attacks = {}
+
+
+    # Active checks 
+    # https://docs.gitlab.com/ee/user/application_security/dast/browser/checks/#active-checks
+
     def check_csp(self, flow):
         logging.debug("Request header is %s" % flow.request.headers)
 
@@ -194,10 +220,35 @@ class Counter:
         #logging.info("Flow headers %s" % flow.request.headers)
 
     def response(self, flow):
-        # check_response_headers_csp(flow)
-        # check_cookie_http_only(flow)
 
-        check_cors(flow, 'watch')
+        flow_referer = flow.request.headers.get('Referer')
+
+        if not flow_referer:
+            logging.info("No flow referer..")
+            return
+        
+        flow_attack_mode = None
+        flow_site_id = None
+
+        for site_id, site_info in self.target_sites.items():
+            if re.compile(site_info['url_regex']).match(flow_referer):
+                flow_attack_mode = site_info['scan_mode']
+                flow_site_id = site_id
+                break
+
+        if not flow_site_id:
+            logging.info("Not scanning site %s" % flow_referer)
+            return
+
+
+        # logging.info(f"Scanning id %s at level %s" % flow_site_id, flow_attack_mode)
+        logging.info(f"[{flow_site_id}] ::> {flow_attack_mode}")
+
+        # check_response_headers_csp(flow)
+        
+        check_cookie_http_only(flow)
+
+        check_cors(flow, flow_site_id, flow_attack_mode)
 
 
 addons = [Counter()]
