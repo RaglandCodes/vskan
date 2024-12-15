@@ -2,13 +2,18 @@
 
 # Run as follows: mitmproxy -s count.py
 
-# mitmdump -s "C:\Users\ragla\Documents\coding_projects\vskan\mitm-addon\count.py"
+# mitmdump -s "path\to\file\count.py"
 
 
 import logging
 import re
 from urllib.parse import urlparse
+from known_risks_data import compomised_external_sites
 from mitmproxy import ctx
+import networkx as nx
+
+G = nx.Graph()
+
 
 
 def parse_csp(csp_value: str):
@@ -42,6 +47,9 @@ def check_response_headers_csp(flow):
     # x_frame_option_header = flow.response.headers["X-Frame-Options"]
 
     #3. Check for Clickjacking https://developer.mozilla.org/en-US/docs/Web/Security/Practical_implementation_guides/Clickjacking
+
+    #TODO: check for sec fetch headers https://www.zaproxy.org/docs/alerts/90005/
+
 
 
 
@@ -123,11 +131,19 @@ def simple_config_file_exposure_check(flow):
     env_check_flow.request.path = '/.env'
     ctx.master.commands.call('replay.client', [env_check_flow])
 
-
+    # Check .git file
+    git_check_flow = flow.copy()
+    git_check_flow.request.path = '/.git'
+    ctx.master.commands.call('replay.client', [git_check_flow])
+    
 
 def code_disclosure_check(flow):
     # WEB_INF
     # TODO: ZAP code: https://github.com/zaproxy/zap-extensions/blob/main/addOns/ascanrules/src/main/java/org/zaproxy/zap/extension/ascanrules/SourceCodeDisclosureWebInfScanRule.java
+
+    # Source code inclusion
+    #TODO: https://www.zaproxy.org/docs/alerts/43/
+
 
     # Swagger
 
@@ -175,6 +191,14 @@ def check_cors(flow, flow_site_id, skan_mode):
 
 
 
+def check_known_compromised_site(flow):
+    matched_with_known_risks = [ c for c in compomised_external_sites if flow.request.host in c]
+
+    logging.info(matched_with_known_risks)
+    if len(matched_with_known_risks) == 0:
+        return
+
+    logging.warn(f"Attempted to connect to following compromised exteranal sites: {matched_with_known_risks}")
 
 def check_sensitive_in_get(flow):
     #TODO: read https://docs.gitlab.com/ee/user/application_security/dast/browser/checks/598.3.html
@@ -194,12 +218,15 @@ class Counter:
     # !! First matching rule will apply
     'owasp_juice' : {
             'url_regex': 'https?://juice-shop-p0va.onrender.com*',
-            'scan_mode': 'probe' # 'probe' | 'attack'
+            'scan_mode': 'probe', # 'probe' | 'attack'
+            'flow_saves': [],
+
     },
 
     'all' : {
             'url_regex': '.*',   
-            'scan_mode': 'watch' # 'probe' | 'attack'
+            'scan_mode': 'watch', # 'probe' | 'attack'
+            'flow_saves': [],
     }
 
 
@@ -232,10 +259,29 @@ class Counter:
         logging.debug("Request header is %s" % flow.request.headers)
 
     def request(self, flow):
-        logging.info(f"Flow req path: {flow.request.path}")
-        pass
+      
+        flow_attack_mode = None
+        flow_site_id = None
 
-        #logging.info("Flow headers %s" % flow.request.headers)
+        flow_referer = flow.request.headers.get('Referer')
+
+
+        for site_id, site_info in self.target_sites.items():
+            if re.compile(site_info['url_regex']).match(flow_referer):
+                flow_attack_mode = site_info['scan_mode']
+                flow_site_id = site_id
+                break
+
+        if not flow_site_id:
+            return
+
+        # attack mode is >= watch here
+
+        if flow.request.method == 'GET':
+            check_known_compromised_site(flow)
+
+
+
 
     def response(self, flow):
 
@@ -259,9 +305,11 @@ class Counter:
 
 
 
-
             if flow.request.path == '/.env' and flow.response.status_code < 400:
                 logging.warn(f"Got non error response for env file with content {flow.response.content}")
+
+            if flow.request.path == '/.git' and flow.response.status_code < 400:
+                logging.warn(f"Got non error response for /.git")
 
             # Process the replay and return. To avoid infinite loop
             return
@@ -295,6 +343,18 @@ class Counter:
 
         check_cors(flow, flow_site_id, flow_attack_mode)
 
+        if flow_attack_mode in ['probe', 'attack']:
+            # Save flows to be used later
+            if flow.request.method in ['GET', 'POST']:
+                self.target_sites[flow_site_id]['flow_saves'].append(flow.copy())
+
+                if len(self.target_sites[flow_site_id]['flow_saves']) % 20 == 0:
+                    logging.info(f"{flow_site_id} has {len(self.target_sites[flow_site_id]['flow_saves'])} saved flows !")
+
+                if len(self.target_sites[flow_site_id]['flow_saves']) > 5_000:
+                    logging.warn(f"{flow_site_id} has more than 5000 saved flows !")
+            
+
         if flow_attack_mode == 'probe':
             #TODO write probing test
 
@@ -303,8 +363,11 @@ class Counter:
                 and flow.request.method == 'GET'
 
             ):
-                simple_config_file_exposure_check(flow)
+                # To avoid unnecessary repetition
                 self.completed_attacks[f"simple_config_exposure_{flow_site_id}"] = True
+                
+                simple_config_file_exposure_check(flow)
+
 
 
         if flow_attack_mode == 'attack':
