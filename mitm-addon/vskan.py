@@ -2,7 +2,7 @@
 
 # Run as follows: mitmproxy -s count.py
 
-# mitmdump -s "path\to\file\count.py"
+# mitmdump -s "path\to\file\vskan.py"
 
 
 import logging
@@ -62,7 +62,7 @@ def check_cookie_http_only(flow):
     cookies_in_response = flow.response.cookies
 
     if(len(cookies_in_response) > 0):
-        logging.info("List of cookies in response: %s" % flow.response.cookies)
+        # logging.info("List of cookies in response: %s" % flow.response.cookies)
         # logging.info("List of cookies in response: %s" % flow.response.cookies.fields)
 
     
@@ -72,13 +72,13 @@ def check_cookie_http_only(flow):
 
 
         for x in iter(cookies_in_response):
-            logging.info("x: %s" % x)
+            # logging.info("x: %s" % x)
             val = cookies_in_response.get_all(x)
 
             for v in val:
-                logging.info("v: %s" % v[0])
+                # logging.info("v: %s" % v[0])
                 attr_keys = list(v[1].keys())
-                logging.info("v[1]: %s" % attr_keys)
+                # logging.info("v[1]: %s" % attr_keys)
                 
                 if('Secure' in attr_keys):
                     logging.debug("%s is set securely.. OK" % x)
@@ -152,6 +152,8 @@ def code_disclosure_check(flow):
     pass
 
 def check_https_usage(flow):
+
+    #TODO: check cipher suites
     if flow.request.scheme == 'http':
         if flow.response.status_code < 400:
             logging.error(f"Got a non error response when using http for {flow.request.host} {flow.request.path}")
@@ -254,7 +256,6 @@ def check_cors(flow, flow_site_id, skan_mode):
 def check_known_compromised_site(flow):
     matched_with_known_risks = [ c for c in compomised_external_sites if flow.request.host in c]
 
-    logging.info(matched_with_known_risks)
     if len(matched_with_known_risks) == 0:
         return
 
@@ -269,7 +270,7 @@ def slow_lorris_attack(floew):
     pass
 
 
-class Counter:
+class Skanner:
     def __init__(self):
         pass
 
@@ -488,4 +489,4 @@ class Counter:
 
 
 
-addons = [Counter()]
+addons = [Skanner()]
