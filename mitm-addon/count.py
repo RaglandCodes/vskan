@@ -7,6 +7,8 @@
 
 import logging
 import re
+import copy
+import random
 from urllib.parse import urlparse
 from known_risks_data import compomised_external_sites
 from mitmproxy import ctx
@@ -149,7 +151,65 @@ def code_disclosure_check(flow):
 
     pass
 
+def check_https_usage(flow):
+    if flow.request.scheme == 'http':
+        if flow.response.status_code < 400:
+            logging.error(f"Got a non error response when using http for {flow.request.host} {flow.request.path}")
 
+    
+
+def http_redirect_check(flow_saves):
+    # Get 5 from the saved flow
+
+    flows_ = copy.deepcopy(flow_saves)
+    random.shuffle(flows_)
+    flows_ = [f for f in flows_ if f.request.method == 'GET']
+
+    logging.info(f"Got {len(flows_)} with 'GET'")
+
+
+
+    # This is a for probing only and limiting the number.. Increase it / remove filter at the caller if want to attack
+    
+    flows_to_probe_http = flows_[:5] if len(flows_) > 5 else flows_
+
+    # With port modified
+    for f in flows_to_probe_http:
+        f_copy = f.copy()
+        f_copy.request.method = 'http'
+
+        if f_copy.request.port in [8443, 443]:
+            f_copy.request.port = 80
+
+        ctx.master.commands.call('replay.client', [f_copy])
+
+    # With port as is
+    for f in flows_to_probe_http:
+        f_copy = f.copy()
+        f_copy.request.method = 'http'
+
+        ctx.master.commands.call('replay.client', [f_copy])
+
+    pass
+
+def hsts_header_check(flow_saves):
+    flows_ = copy.deepcopy(flow_saves)
+    flows_ = [f for f in flows_ if f.request.method == 'GET']
+
+    hsts_value = [f.response.headers.get('Strict-Transport-Security') for f in flows_]
+
+    truthy_hsts_value = [h for h in hsts_value if h]
+
+    if not len(truthy_hsts_value):
+        logging.warn("HSTS header doesn't seem to be set")
+        return
+
+    included_subdomains = [h for h in truthy_hsts_value if 'includeSubDomains' in h]
+
+    if not len(included_subdomains):
+        logging.warn("HSTS header doesn't include subdomains")
+        
+    
 
 def simple_header_info_leak_check(flow):
     x_powered_by_header_value = flow.response.headers.get("X-Powered-By") 
@@ -265,6 +325,10 @@ class Counter:
 
         flow_referer = flow.request.headers.get('Referer')
 
+        if not flow_referer:
+            #TODO handle this case of avoid early return
+            return
+
 
         for site_id, site_info in self.target_sites.items():
             if re.compile(site_info['url_regex']).match(flow_referer):
@@ -287,11 +351,8 @@ class Counter:
 
         if flow.is_replay == 'request':
             logging.info(f"Got a replay's response [{flow.response.status_code }] with {flow.request.method} host {flow.request.host} and path {flow.request.path}")
-            logging.info(flow.request.path)
-            logging.info(flow.response.status_code)
-
-            logging.info(flow.request.path == '/.htaccess' )
-            logging.info(flow.response.status_code < 400)
+    
+    
             if flow.request.path == '/.htaccess' and flow.response.status_code < 400:
                 logging.warn(f"Got non error response for htcaccess with content {flow.response.content}")
 
@@ -310,6 +371,8 @@ class Counter:
 
             if flow.request.path == '/.git' and flow.response.status_code < 400:
                 logging.warn(f"Got non error response for /.git")
+
+            check_https_usage(flow)
 
             # Process the replay and return. To avoid infinite loop
             return
@@ -343,6 +406,11 @@ class Counter:
 
         check_cors(flow, flow_site_id, flow_attack_mode)
 
+        check_https_usage(flow)
+
+
+
+
         if flow_attack_mode in ['probe', 'attack']:
             # Save flows to be used later
             if flow.request.method in ['GET', 'POST']:
@@ -353,10 +421,12 @@ class Counter:
 
                 if len(self.target_sites[flow_site_id]['flow_saves']) > 5_000:
                     logging.warn(f"{flow_site_id} has more than 5000 saved flows !")
+
+            
+
             
 
         if flow_attack_mode == 'probe':
-            #TODO write probing test
 
             if (
                 not self.completed_attacks.get(f"simple_config_exposure_{flow_site_id}") 
@@ -367,6 +437,34 @@ class Counter:
                 self.completed_attacks[f"simple_config_exposure_{flow_site_id}"] = True
                 
                 simple_config_file_exposure_check(flow)
+
+
+            if (
+                not self.completed_attacks.get(f"https_reditect_{flow_site_id}") 
+                and len(self.target_sites[flow_site_id]['flow_saves']) > 20
+                and flow.request.method == 'GET'
+            ):
+                # To avoid unnecessary repetition
+                self.completed_attacks[f"https_reditect_{flow_site_id}"] = True
+                
+                http_redirect_check(self.target_sites[flow_site_id]['flow_saves'])
+
+
+            if (
+                not self.completed_attacks.get(f"hsts_{flow_site_id}") 
+
+                # HSTS not strictly needed in every request.. but best to include it in the first few
+                and len(self.target_sites[flow_site_id]['flow_saves']) > 10
+                and flow.request.method == 'GET'
+            ):
+                # To avoid unnecessary repetition
+                self.completed_attacks[f"hsts_{flow_site_id}"] = True
+
+                logging.info(f"Checking hsts for {flow_site_id}")
+                
+                hsts_header_check(self.target_sites[flow_site_id]['flow_saves'])
+
+            
 
 
 
