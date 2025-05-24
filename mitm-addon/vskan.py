@@ -195,6 +195,10 @@ def simple_config_file_exposure_check(flow):
     git_check_flow.request.path = '/.git'
     ctx.master.commands.call('replay.client', [git_check_flow])
     
+#TODO: file upload mechanisms
+
+#TODO : detect server stack
+
 
 def code_disclosure_check(flow):
     # WEB_INF, META-INF
@@ -206,8 +210,10 @@ def code_disclosure_check(flow):
     # WEB-INF /web.xml
     # https://stackoverflow.com/q/66812529
 
+    #/conf/server.xml/ from https://security.stackexchange.com/a/198200
     # Swagger
 
+    # TODO : check directory indexing enabled
     pass
 
 def check_https_usage(flow):
@@ -338,6 +344,14 @@ def form_fill_xss_attack(flow):
 
 def get_parameter_xss_attack(flow):
     pass
+
+def watch_jwt(flow):
+    pass
+
+def attack_jwt_none_alg(flow):
+
+    did_attack = False
+    return did_attack
 
 
 class Skanner:
@@ -482,7 +496,9 @@ class Skanner:
         check_https_usage(flow)
 
 
-
+        if len(self.target_sites[flow_site_id]['flow_saves']) < 1_000:
+            # Not running forever, to avoid unnecessary noise
+            watch_jwt(flow)
 
         if flow_attack_mode in ['probe', 'attack']:
             # Save flows to be used later
@@ -546,6 +562,7 @@ class Skanner:
                 
                 hsts_header_check(self.target_sites[flow_site_id]['flow_saves'])
 
+
             
 
 
@@ -561,6 +578,8 @@ class Skanner:
             # Slow Lorris
 
             # HTTP host header
+
+
 
                 
             pass
