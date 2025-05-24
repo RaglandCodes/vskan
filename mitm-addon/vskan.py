@@ -10,13 +10,70 @@ import re
 import copy
 import random
 from urllib.parse import urlparse
+from enum import Enum
 from known_risks_data import compomised_external_sites
 from mitmproxy import ctx
 import networkx as nx
 
 G = nx.Graph()
 
+class SkannedVulnerabilityType(Enum):
+    COOKIE_SECURE = 1
+    COOKIE_SAME_SITE = 2
+    COOKIE_HTTP_ONLY = 3
 
+    HEADER_X_CONTENT_TYPE_OPTIONS = 4
+    HEADER_HSTS_SET = 11
+    HEADER_HSTS_SUBDOMAIN = 12
+
+    HEADER_LEAK_X_POWERED_BY = 13
+    HEADER_LEAK_X_BACKEND_SERVER = 14
+    HEADER_LEAK_X_ASPNET_VERSION = 15
+
+    CONFIG_FILE_EXPOSURE_HTACCESS = 5
+    CONFIG_FILE_EXPOSURE_ENV = 6
+    CONFIG_FILE_EXPOSURE_GIT = 7
+    # CONFIG_FILE_EXPOSURE_HTACCESS = 8
+
+    JWT_WELL_KNOWN_SECRET = 30
+    JWT_NO_VERIFICATION = 31
+    JWT_SELF_SIGNED_INJECT = 32
+    # JWT_WELL_KNOWN_SECRET = 33
+    # JWT_WELL_KNOWN_SECRET = 34
+    # JWT_WELL_KNOWN_SECRET = 35
+
+
+
+    HTTP_SCHEME_USAGE = 9
+    HTTP_REDIRECT = 10
+
+    CORS_SET = 20
+    CORS_ALL_ALLOWED = 21
+
+    CONNECT_COMPROMISED_SITE = 22
+
+    #-- Information only and not directly a vulnerability
+
+
+
+
+
+
+
+class SkannedVulnerability:
+    def __init__(self, vuln_type: SkannedVulnerabilityType, short_message: str, long_message: str) -> None:
+        self.vuln_type = vuln_type
+        self.short_message = short_message
+        self.long_message = long_message
+
+
+class PublishVulnerabilities:
+    discoverd_vulns : list[SkannedVulnerability] = []
+    
+    def add(self, v: SkannedVulnerability):
+        self.discoverd_vulns += [v]
+
+pl = PublishVulnerabilities()
 
 def parse_csp(csp_value: str):
     if not csp_value:
@@ -25,19 +82,21 @@ def parse_csp(csp_value: str):
     directives = csp_value.split(';')
     directives = [ d.strip() for d in directives]
     directives = [ d.split() for d in directives]
+    directives = [ d for d in directives if d]
+    logging.info("directives are %s" % directives)
 
     return {c[0]: c[1:] for c in directives}
 
 
 def check_response_headers_csp(flow):
-    # logging.info("response header iss %s" % flow.response.headers)
+    #logging.info("response header iss %s" % flow.response.headers)
 
     csp_header = flow.response.headers.get("content-security-policy")
 
-    # logging.info("response header iss %s" % csp_header)
+#    logging.info("csp header iss %s" % csp_header)
 
-    csp_directives = parse_csp(csp_header)
-    logging.info("csp directives arre  %s" % csp_directives)
+ #   csp_directives = parse_csp(csp_header)
+  #  logging.info("csp directives arre  %s" % csp_directives)
     # logging.info("csp directives arre  %s" % )
 
     # 1. Check for XSS
@@ -115,8 +174,6 @@ def simple_header_set_check(flow):
         logging.warn("X-Content-Type-Options exists but not set to nosniff")
 
 def simple_config_file_exposure_check(flow):
-
-
     flow_referrrer = flow.request.headers.get('Referer')
     # have to add one more r to compensate for this^
 
@@ -140,12 +197,14 @@ def simple_config_file_exposure_check(flow):
     
 
 def code_disclosure_check(flow):
-    # WEB_INF
+    # WEB_INF, META-INF
     # TODO: ZAP code: https://github.com/zaproxy/zap-extensions/blob/main/addOns/ascanrules/src/main/java/org/zaproxy/zap/extension/ascanrules/SourceCodeDisclosureWebInfScanRule.java
 
     # Source code inclusion
     #TODO: https://www.zaproxy.org/docs/alerts/43/
 
+    # WEB-INF /web.xml
+    # https://stackoverflow.com/q/66812529
 
     # Swagger
 
@@ -266,7 +325,18 @@ def check_sensitive_in_get(flow):
     pass
 
 
-def slow_lorris_attack(floew):
+def slow_lorris_attack(flow):
+    pass
+
+def http_host_header_attack(flow):
+    # https://portswigger.net/web-security/host-header/exploiting#connection-state-attacks
+    pass
+
+def form_fill_xss_attack(flow):
+    # https://portswigger.net/web-security/essential-skills/obfuscating-attacks-using-encodings#context-specific-decoding
+    pass
+
+def get_parameter_xss_attack(flow):
     pass
 
 
@@ -356,6 +426,7 @@ class Skanner:
     
             if flow.request.path == '/.htaccess' and flow.response.status_code < 400:
                 logging.warn(f"Got non error response for htcaccess with content {flow.response.content}")
+                pl.add(SkannedVulnerability(SkannedVulnerabilityType.CONFIG_FILE_EXPOSURE_HTACCESS, None, None))
 
                 response_test = flow.response.content.decode('utf-8')
 
@@ -369,6 +440,7 @@ class Skanner:
 
             if flow.request.path == '/.env' and flow.response.status_code < 400:
                 logging.warn(f"Got non error response for env file with content {flow.response.content}")
+
 
             if flow.request.path == '/.git' and flow.response.status_code < 400:
                 logging.warn(f"Got non error response for /.git")
@@ -401,7 +473,7 @@ class Skanner:
         # logging.info(f"Scanning id %s at level %s" % flow_site_id, flow_attack_mode)
         logging.info(f"[{flow_site_id}] ::> {flow_attack_mode}")
 
-        # check_response_headers_csp(flow)
+        check_response_headers_csp(flow)
         
         check_cookie_http_only(flow)
 
@@ -439,7 +511,16 @@ class Skanner:
                 
                 simple_config_file_exposure_check(flow)
 
+            if (
+                not self.completed_attacks.get(f"code_exposure_{flow_site_id}") 
+                and flow.request.method == 'GET'
 
+            ):
+                # To avoid unnecessary repetition
+                self.completed_attacks[f"code_exposure_{flow_site_id}"] = True
+                
+                code_disclosure_check(flow)
+            
             if (
                 not self.completed_attacks.get(f"https_reditect_{flow_site_id}") 
                 and len(self.target_sites[flow_site_id]['flow_saves']) > 20
@@ -478,6 +559,8 @@ class Skanner:
 
             
             # Slow Lorris
+
+            # HTTP host header
 
                 
             pass
