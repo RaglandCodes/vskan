@@ -479,11 +479,6 @@ class Skanner:
             check_known_analytics_provider(flow)
 
 
-
-
-
-
-
     def response(self, flow):
 
         if flow.is_replay == 'request':
@@ -547,14 +542,15 @@ class Skanner:
 
         check_https_usage(flow)
 
-        watch_known_web_server_software(flow)
-
-        watch_known_web_server_infra(flow)
-
 
         if len(self.target_sites[flow_site_id]['flow_saves']) < 1_000:
             # Not running forever, to avoid unnecessary noise
             watch_jwt(flow)
+
+            watch_known_web_server_software(flow)
+
+            watch_known_web_server_infra(flow)
+
 
         if flow_attack_mode in ['probe', 'attack']:
             # Save flows to be used later
@@ -582,6 +578,15 @@ class Skanner:
                 self.completed_attacks[f"simple_config_exposure_{flow_site_id}"] = True
                 
                 simple_config_file_exposure_check(flow)
+
+            if (
+                not self.completed_attacks.get(f"ssl_watch_{flow_site_id}") 
+                and flow.request.method == 'GET'
+
+            ):
+              # TODO ssl validate...
+              # only if the domain is matching.. else leave it
+              pass
 
             if (
                 not self.completed_attacks.get(f"code_exposure_{flow_site_id}") 
