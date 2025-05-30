@@ -52,6 +52,14 @@ class SkannedVulnerabilityType(Enum):
 
     CONNECT_COMPROMISED_SITE = 22
 
+    INFO_IP_ADDRESS = 40
+    INFO_OPEN_PORT = 41
+    INFO_SERVER_INFRA_HOSTING_PROVIDER = 42
+    INFO_SERVER_INFRA_LOAD_BALANCE = 43
+    INFO_SERVER_INFRA_TLS = 44
+    INFO_SERVER_INFRA_TLS = 44
+
+
     #-- Information only and not directly a vulnerability
 
 
@@ -216,6 +224,44 @@ def code_disclosure_check(flow):
     # TODO : check directory indexing enabled
     pass
 
+
+def watch_known_web_server_software(flow):
+    # Java Spring
+
+    # ASP.NET
+
+    # Wordpress
+
+
+    # --- Frontend ---
+
+    # React
+
+    # Vue
+
+    # Angular
+
+    # Bootstrap
+
+    pass
+
+def watch_known_web_server_infra(flow):
+    # Apache
+
+    # nginx
+
+    # IIS
+
+    # Hosting provider
+
+    # Azure
+
+    # GCP
+
+    # Cloudflare
+
+    pass
+
 def check_https_usage(flow):
 
     #TODO: check cipher suites
@@ -317,6 +363,8 @@ def check_cors(flow, flow_site_id, skan_mode):
         # https://portswigger.net/web-security/cors
 
 
+def check_known_analytics_provider(flow):
+    pass
 
 def check_known_compromised_site(flow):
     matched_with_known_risks = [ c for c in compomised_external_sites if flow.request.host in c]
@@ -428,6 +476,10 @@ class Skanner:
 
         if flow.request.method == 'GET':
             check_known_compromised_site(flow)
+            check_known_analytics_provider(flow)
+
+
+
 
 
 
@@ -494,6 +546,10 @@ class Skanner:
         check_cors(flow, flow_site_id, flow_attack_mode)
 
         check_https_usage(flow)
+
+        watch_known_web_server_software(flow)
+
+        watch_known_web_server_infra(flow)
 
 
         if len(self.target_sites[flow_site_id]['flow_saves']) < 1_000:
