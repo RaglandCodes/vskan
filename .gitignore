@@ -1,2 +1,4 @@
 **/node_modules
+
 mitm-addon/notes.txt
+mitm-addon/__pycache__/*

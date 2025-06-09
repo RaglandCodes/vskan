@@ -1,0 +1,55 @@
+.<html>
+
+<head>
+    <title>vSkan</title>
+    <style></style>
+</head>
+
+<body>
+    <h1> vSkan </h1>
+    <h2>Scan results </h2>
+
+    <div x-data="scanResults()" x-init="fetchResults()">
+        <template x-if="loading">
+            <p>Loading...</p>
+        </template>
+
+        <template x-if="!loading && results.length === 0">
+            <p>No results yet.</p>
+        </template>
+
+        <ul>
+            <template x-for="r in results" :key="r.id">
+                <li>
+                    <strong x-text="r.hi"></strong>
+                </li>
+            </template>
+        </ul>
+    </div>
+
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script>
+        function scanResults() {
+            return {
+                results: [],
+                isLoading: true,
+                isErrored: false,
+
+                async fetchResults() {
+                    try {
+                        const results_ = await fetch('http://localhost:8085/data.json');
+                        this.results = await results_.json();
+                    } catch (error) {
+                        console.error('Fetch failed:', error);
+                        this.isErrored = true;
+                        this.isLoading = false
+                    } finally {
+                        this.isLoading = false;
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+
+</html>

