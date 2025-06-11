@@ -14,6 +14,13 @@ import socket
 import time
 import json
 import ssl
+# from markdown_it import MarkdownIt
+# from mdit_py_plugins.front_matter import front_matter_plugin
+# from mdit_py_plugins.footnote import footnote_plugin
+
+
+
+
 
 from urllib.parse import urlparse
 
@@ -27,6 +34,13 @@ import networkx as nx
 
 
 G = nx.Graph()
+# md = (
+#     MarkdownIt('commonmark' ,{'breaks':True,'html':True})
+#     .use(front_matter_plugin)
+#     .use(footnote_plugin)
+#     .enable('table')
+# )
+
 
 
 
@@ -67,6 +81,7 @@ class PublishVulnerabilities:
                     'short_message': d.short_message,
                     'long_message': d.long_message,
                     'remediation_method': remediations_dict.get(d.vuln_type)
+                    # 'remediation_method': md.render(remediations_dict.get(d.vuln_type))
             } for d in self.discoverd_vulns]
 
 
@@ -526,7 +541,7 @@ def slow_lorris_attack_http(flow, for_https = False):
 
     head_ctr = 0;
     sleep_time_interval = 1
-    max_try_to_warn = 33
+    max_try_to_warn = 10
     # Slowly send headers, one at a time
     try:
         while True:
@@ -726,7 +741,10 @@ class Skanner:
         
         check_cookie_http_only(flow)
 
-        check_cors(flow, flow_site_id, flow_attack_mode)
+        if (not self.completed_attacks.get(f"cors_{flow_site_id}")):
+            check_cors(flow, flow_site_id, flow_attack_mode)
+            self.completed_attacks[f"cors_{flow_site_id}"] = True
+
 
         check_https_usage(flow)
 
@@ -737,7 +755,9 @@ class Skanner:
 
             watch_known_web_server_software(flow)
 
-            watch_known_web_server_infra(flow)
+            if (not self.completed_attacks.get(f"hosting_provider_{flow_site_id}")):
+                watch_known_web_server_infra(flow)
+                self.completed_attacks[f"hosting_provider_{flow_site_id}"] = True
 
 
         if flow_attack_mode in ['probe', 'attack']:

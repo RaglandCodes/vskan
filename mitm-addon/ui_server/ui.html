@@ -34,6 +34,7 @@
 <body>
 
     <h1> vSkan </h1>
+    <p> Run in parallel to the running mitm-proxy add on. Will show discovered vulnerabilites here</p>
     <h2>Scan results </h2>
 
     <div x-data="scanResults()" x-init="fetchResults()">
@@ -48,13 +49,13 @@
         <ul>
             <template x-for="r in results" :key="r.id">
                 <li class="vuln_item_list" x-data="{isExpanded: false}" x-on:click="isExpanded = !isExpanded">
-                    <strong x-text="r.vuln_type"></strong>
+                    <!-- <strong x-text="r.vuln_type"></strong> -->
                     <span x-text="r.short_message"></span>
                     <div class="vuln_item_list__long_desc" x-show="isExpanded == true">
                         <p x-text="r.long_message"></p>
                         <hr>
                         <div>
-                            <p x-text="r.remediation_method">
+                            <p x-html="r.remediation_method">
 
                             </p>
                         </div>
