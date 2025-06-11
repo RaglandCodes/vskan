@@ -1,27 +1,64 @@
 .<html>
 
 <head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap"
+        rel="stylesheet">
     <title>vSkan</title>
-    <style></style>
+    <style>
+        html,
+        body {
+            font-family: "Inter", sans-serif;
+            font-optical-sizing: auto;
+        }
+
+        .vuln_item_list {
+            background-color: #ECEFF1;
+            list-style-type: none;
+            margin-bottom: 0.3rem;
+            padding: 0.2rem;
+            border-radius: 0.3rem;
+            /* border-bottom: 1px solid teal; */
+            margin-left: -2rem;
+            border-left: 0.2rem solid #263238;
+        }
+
+        .vuln_item_list__long_desc {
+            margin-top: 0.2rem;
+        }
+    </style>
 </head>
 
 <body>
+
     <h1> vSkan </h1>
     <h2>Scan results </h2>
 
     <div x-data="scanResults()" x-init="fetchResults()">
-        <template x-if="loading">
+        <template x-if="isLoading">
             <p>Loading...</p>
         </template>
 
-        <template x-if="!loading && results.length === 0">
+        <template x-if="!isLoading && results.length === 0">
             <p>No results yet.</p>
         </template>
 
         <ul>
             <template x-for="r in results" :key="r.id">
-                <li>
-                    <strong x-text="r.hi"></strong>
+                <li class="vuln_item_list" x-data="{isExpanded: false}" x-on:click="isExpanded = !isExpanded">
+                    <strong x-text="r.vuln_type"></strong>
+                    <span x-text="r.short_message"></span>
+                    <div class="vuln_item_list__long_desc" x-show="isExpanded == true">
+                        <p x-text="r.long_message"></p>
+                        <hr>
+                        <div>
+                            <p x-text="r.remediation_method">
+
+                            </p>
+                        </div>
+                    </div>
                 </li>
             </template>
         </ul>
@@ -39,6 +76,7 @@
                     try {
                         const results_ = await fetch('http://localhost:8085/data.json');
                         this.results = await results_.json();
+                        console.log(this.results);
                     } catch (error) {
                         console.error('Fetch failed:', error);
                         this.isErrored = true;

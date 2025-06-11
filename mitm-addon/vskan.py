@@ -19,6 +19,8 @@ from urllib.parse import urlparse
 
 from enum import Enum
 from known_risks_data import compomised_external_sites
+from vuln_types import SkannedVulnerabilityType
+from remediations import remediations_dict
 from ssl_utils import skan_domain_ssl
 from mitmproxy import ctx
 import networkx as nx
@@ -26,52 +28,9 @@ import networkx as nx
 
 G = nx.Graph()
 
-class SkannedVulnerabilityType(Enum):
-    COOKIE_SECURE = 1
-    COOKIE_SAME_SITE = 2
-    COOKIE_HTTP_ONLY = 3
 
-    HEADER_X_CONTENT_TYPE_OPTIONS = 4
-    HEADER_HSTS_SET = 11
-    HEADER_HSTS_SUBDOMAIN = 12
-
-    HEADER_LEAK_X_POWERED_BY = 13
-    HEADER_LEAK_X_BACKEND_SERVER = 14
-    HEADER_LEAK_X_ASPNET_VERSION = 15
-
-    CONFIG_FILE_EXPOSURE_HTACCESS = 5
-    CONFIG_FILE_EXPOSURE_ENV = 6
-    CONFIG_FILE_EXPOSURE_GIT = 7
-    # CONFIG_FILE_EXPOSURE_HTACCESS = 8
-
-    JWT_WELL_KNOWN_SECRET = 30
-    JWT_NO_VERIFICATION = 31
-    JWT_SELF_SIGNED_INJECT = 32
-    # JWT_WELL_KNOWN_SECRET = 33
-    # JWT_WELL_KNOWN_SECRET = 34
-    # JWT_WELL_KNOWN_SECRET = 35
-
-
-
-    HTTP_SCHEME_USAGE = 9
-    HTTP_REDIRECT = 10
-
-    CORS_SET = 20
-    CORS_ALL_ALLOWED = 21
-
-    CONNECT_COMPROMISED_SITE = 22
-
-    INFO_IP_ADDRESS = 40
-    INFO_OPEN_PORT = 41
-    INFO_SERVER_INFRA_HOSTING_PROVIDER = 42
-    INFO_SERVER_INFRA_LOAD_BALANCE = 43
-    INFO_SERVER_INFRA_TLS = 44
-    # INFO_SERVER_INFRA_TLS = 44
-
-    ATTACK_SERVER_SLOWLORIS = 47
 
     #-- Information only and not directly a vulnerability
-
 
 
 
@@ -85,7 +44,7 @@ class SkannedVulnerability:
         self.long_message = long_message
 
     def list_id(self) -> str:
-        return hashlib.md5(f"{self.short_message}+{self.long_message}".encode("utf-8")).hexdigest()
+        return hashlib.md5(f"{self.short_message}+{self.long_message}+{random.randint(1000, 9990000)}".encode("utf-8")).hexdigest()
 
     def vuln_type_display(self) -> str:
         return self.vuln_type.name
@@ -104,12 +63,18 @@ class PublishVulnerabilities:
     def update_data(self):
         path_to_data_out = r"C:\Users\ragla\Documents\coding_projects\vskan\mitm-addon\ui_server\data.json"
         with open(path_to_data_out, "w") as f:
-            
+            list_for_ui = [{'id': d.list_id() , 'vuln_type': d.vuln_type_display(),
+                    'short_message': d.short_message,
+                    'long_message': d.long_message,
+                    'remediation_method': remediations_dict.get(d.vuln_type)
+            } for d in self.discoverd_vulns]
+
+
             f.write(
-                f"{json.dumps([{'id': d.list_id() , 'vuln_type': d.vuln_type_display()} for d in self.discoverd_vulns])}")
+                f"{json.dumps(list_for_ui)}")
         
 
-        logging.info(f"sv from c: {self.discoverd_vulns}")
+        # logging.info(f"sv from c: {self.discoverd_vulns}")
 
 pl = PublishVulnerabilities()
 
@@ -182,6 +147,10 @@ def check_cookie_http_only(flow):
                 else:
                     #TODO check if is a session
                     logging.warn("%s is not set securely.." % x)
+                    pl.add(SkannedVulnerability(SkannedVulnerabilityType.COOKIE_SECURE, 
+                        'Cookie not set securely'
+                        , f"Cookie {x} not set securely"))
+
                 
 
                 if('SameSite' in attr_keys):
@@ -189,6 +158,9 @@ def check_cookie_http_only(flow):
                 else:
                     #TODO check if is a session
                     logging.warn("%s is not set SameSite.." % x)
+                    pl.add(SkannedVulnerability(SkannedVulnerabilityType.COOKIE_SAME_SITE, 
+                        'Cookie not set with same site attribute'
+                        , f"Cookie {x} not set with same site attribute"))
 
 
                 if('HttpOnly' in attr_keys):
@@ -196,6 +168,9 @@ def check_cookie_http_only(flow):
                 else:
                     #TODO check if is a session
                     logging.warn("%s is not set HttpOnly.." % x)
+                    pl.add(SkannedVulnerability(SkannedVulnerabilityType.COOKIE_HTTP_ONLY, 
+                        'Cookie not set with http only attribute'
+                        , f"Cookie {x} not set with same http only attribute"))
 
 
 def simple_header_set_check(flow):
@@ -204,12 +179,19 @@ def simple_header_set_check(flow):
 
     if not x_content_type_options_header_value:
         logging.warn("X-Content-Type-Options is not set")
+        pl.add(SkannedVulnerability(SkannedVulnerabilityType.CONTENT_TYPE_OPTIONS, 
+                        'X-Content-Type-Options  header is not set'
+                        , None))
 
     if x_content_type_options_header_value != "nosniff":
         #TODO: read the multiple stack answers: https://stackoverflow.com/questions/18337630/what-is-x-content-type-options-nosniff
         # TODO: read https://en.wikipedia.org/wiki/Content_sniffing
         # TODO: read about mime types: https://developer.mozilla.org/en-US/docs/Web/HTTP/MIME_types#structure_of_a_mime_type
         logging.warn("X-Content-Type-Options exists but not set to nosniff")
+        pl.add(SkannedVulnerability(SkannedVulnerabilityType.CONTENT_TYPE_OPTIONS_NOSNIFF, 
+                        'Content type options is not set to nosniff'
+                        , 'X-Content-Type-Options exists but not set to nosniff'))
+
 
 def simple_config_file_exposure_check(flow):
     flow_referrrer = flow.request.headers.get('Referer')
@@ -313,6 +295,9 @@ def watch_known_web_server_infra(flow):
 
     if(x_server_header_values):
         logging.warn(f"Server values in header: {x_server_header_values}")
+        pl.add(SkannedVulnerability(SkannedVulnerabilityType.INFO_SERVER_INFRA_HOSTING_PROVIDER, 
+                 'Server value in header'
+                , f"Server: {x_server_header_values}"))
 
     # Apache
     # - TODO.. The header contains "Apache"
@@ -323,6 +308,9 @@ def watch_known_web_server_infra(flow):
     # MS
     if(x_powered_by_header_value and 'ASP.NET' in x_powered_by_header_value):
         logging.warn("Server software uses ASP.NET")
+        pl.add(SkannedVulnerability(SkannedVulnerabilityType.INFO_SERVER_SOFTWARE, 
+                 "Server software uses ASP.NET"
+                , None))
 
     for k, v in flow.response.headers.items(multi=False):
         if 'AspNet' in k:
@@ -332,6 +320,9 @@ def watch_known_web_server_infra(flow):
     
     if(headers_indicating_msft_stack):
         logging.warn(f"Found headers indicating server run on Windows server tech: {headers_indicating_msft_stack}")
+        pl.add(SkannedVulnerability(SkannedVulnerabilityType.INFO_SERVER_SOFTWARE, 
+                f"Found headers indicating server run on Windows server tech"
+                , f"Headers: {headers_indicating_msft_stack}"))
 
     # Hosting provider
 
@@ -764,7 +755,7 @@ class Skanner:
 
             
 
-        if flow_attack_mode == 'probe':
+        if flow_attack_mode in ['probe', 'attack']:
 
             if (
                 not self.completed_attacks.get(f"simple_config_exposure_{flow_site_id}") 
